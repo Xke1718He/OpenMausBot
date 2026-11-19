@@ -1,7 +1,29 @@
 import { confirm as clackConfirm, isCancel, password, select, text } from "@clack/prompts";
 import { createInterface } from "node:readline";
+import { createInterface as createAsyncInterface } from "node:readline/promises";
 import { PassThrough, type Readable, type Writable } from "node:stream";
 import { stripVTControlCharacters } from "node:util";
+
+export interface CliIo {
+  log(line: string): void;
+  error(line: string): void;
+  ask(question: string): Promise<string>;
+}
+
+export function defaultIo(): CliIo {
+  return {
+    log: (line) => console.log(line),
+    error: (line) => console.error(line),
+    ask: async (question) => {
+      const rl = createAsyncInterface({ input: process.stdin, output: process.stdout });
+      try {
+        return await rl.question(question);
+      } finally {
+        rl.close();
+      }
+    },
+  };
+}
 
 export interface SetupIo {
   log(line: string): void;
