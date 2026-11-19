@@ -254,6 +254,9 @@ if (listening) {
   try {
     const doctor = await runCli(["doctor", "--json"]);
     const bots = await runCli(["bots", "--json"]);
+    const feishu = await runCli(["feishu", "--help"]);
+    assert.equal(feishu.code, 0, `Packaged Feishu command failed: ${feishu.stderr}`);
+    assert.match(feishu.stdout, /openmausbot feishu --config FILE/);
     headlessReport = { doctor: { code: doctor.code, body: JSON.parse(doctor.stdout), stderr: doctor.stderr }, bots: { code: bots.code, body: JSON.parse(bots.stdout) } };
   } catch (error) {
     headlessReport = { error: String((error && error.message) || error) };

@@ -44,6 +44,7 @@ recipe from sending messages to the user's running app by accident.
 Use only mapped, tested commands:
 
 - [The headless command line](headless-cli.md)
+- [Feishu messaging connector](feishu.md)
 - [Chat turns](chat-turns.md)
 - [OpenAI reply readout](openai-readout.md)
 - [Conversation context compaction](context-compaction.md)

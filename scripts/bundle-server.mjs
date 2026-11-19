@@ -21,11 +21,9 @@ const yamlEsmPlugin = {
   },
 };
 
-// ws is CommonJS and requires Node's own modules, which an ESM bundle reaches
-// only through a require of its own (esbuild otherwise throws "Dynamic require
-// of "events" is not supported" when it loads).
+// ws requires Node modules, and Lark SDK 1.76.0 reads __dirname to discover its version. Both are CommonJS globals.
 const NODE_REQUIRE = {
-  js: 'import { createRequire as __ombCreateRequire } from "node:module";\nconst require = __ombCreateRequire(import.meta.url);',
+  js: 'import { createRequire as __ombCreateRequire } from "node:module";\nimport { fileURLToPath as __ombFileURLToPath } from "node:url";\nimport { dirname as __ombDirname } from "node:path";\nconst require = __ombCreateRequire(import.meta.url);\nconst __dirname = __ombDirname(__ombFileURLToPath(import.meta.url));',
 };
 
 // Every file run as its own process.
