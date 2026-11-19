@@ -17,7 +17,6 @@ import { randomBytes } from "node:crypto";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 import { phonePairingLink } from "../shared/pairing-link.ts";
@@ -36,7 +35,7 @@ import { runFleetCommand, type FleetInput } from "./fleet-cli.ts";
 import { startFleetAgent } from "./fleet-agent.ts";
 import { fleetLayout } from "./fleet.ts";
 import { clearLeftoverTailscaleServe, explainTailscaleFailure, tailnetListenFallback, tailscaleServe, tailscaleStatus, type TailscaleStatus } from "./tailscale.ts";
-import { defaultSetupIo, SetupCancelled, type SetupIo } from "./cli-prompts.ts";
+import { defaultIo, defaultSetupIo, SetupCancelled, type CliIo, type SetupIo } from "./cli-prompts.ts";
 import { routeCli, usage } from "./cli-usage.ts"; import { savedSessionHeaders } from "./headless/saved-servers.ts";
 import { normalizePhoneOrigin, phonePairingInstructions, runPhoneSetup } from "./cli-phone-setup.ts";
 import { browserSignInLines, desktopOwnedRefusal, formatSessions, pairingBlock, RELAY_NOT_WITH_TUNNEL, relayPairingBlock, showRelayPairing } from "./cli-pairing.ts";
@@ -226,26 +225,7 @@ export function parseArgs(argv: string[], env: NodeJS.ProcessEnv = process.env, 
   return options;
 }
 
-export interface CliIo {
-  log(line: string): void;
-  error(line: string): void;
-  ask(question: string): Promise<string>;
-}
-
-export function defaultIo(): CliIo {
-  return {
-    log: (line) => console.log(line),
-    error: (line) => console.error(line),
-    ask: async (question) => {
-      const rl = createInterface({ input: process.stdin, output: process.stdout });
-      try {
-        return await rl.question(question);
-      } finally {
-        rl.close();
-      }
-    },
-  };
-}
+export { defaultIo, type CliIo } from "./cli-prompts.ts";
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
