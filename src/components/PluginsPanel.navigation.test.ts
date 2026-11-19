@@ -62,6 +62,7 @@ vi.mock("./EmailCard", () => ({
 vi.mock("./PostizCard", () => ({
   PostizCard: () => createElement("div", { "data-postiz-card": true }, "Postiz"),
 }));
+vi.mock("./FeishuCard", () => ({ FeishuCard: () => createElement("div", { "data-feishu-card": true }, "Feishu / Lark") }));
 import { HOSTED_MCP_APPS } from "@/lib/hosted-mcp-apps";
 import { APPS_PREVIEW_COUNT, PluginsPanel, USED_BY_AVATAR_SIZE, botsUsingService } from "./PluginsPanel";
 import { AppTile, AppTileView, type AppTileProps } from "./AppTile";
@@ -171,6 +172,21 @@ describe("Apps pop-up", () => {
     const html = render().html;
     expect(html).toContain('data-hosted-app="whop"');
     expect(html).toContain('data-hosted-app="agentcard"');
+  });
+  it("finds Feishu by Chinese, English and Lark names, includes Communication, and counts a connection", () => {
+    const wrapper = () => render().nodes.find(node => node.props["data-native-card"] === "feishu")!;
+    for (const search of ["飞书", "feishu", "lark", "la"]) {
+      fixture.overrides.set(SEARCH, search);
+      expect(wrapper().props.className).toBe("contents");
+    }
+    fixture.overrides.set(SEARCH, "notion"); expect(wrapper().props.className).toBe("hidden");
+    fixture.overrides.set(SEARCH, ""); fixture.overrides.set(CATEGORY, "Communication");
+    expect(wrapper().props.className).toBe("contents");
+    fixture.overrides.set(CATEGORY, "Social"); expect(wrapper().props.className).toBe("hidden");
+    fixture.overrides.set(CATEGORY, null); fixture.overrides.set(TAB, "connected"); fixture.overrides.set(25, false);
+    expect(wrapper().props.className).toBe("hidden");
+    fixture.overrides.set(25, true); expect(wrapper().props.className).toBe("contents");
+    expect(render().html).toContain("2 connected");
   });
   it("names the connected hosted apps in the setup notice", () => {
     fixture.overrides.set(CONFIGURED, false);
@@ -593,7 +609,7 @@ describe("Apps pop-up", () => {
     expect(fixture.overrides.get(20)).toBe("Productivity");
   });
 
-  const MCP_SERVERS = 24, SUGGESTIONS = 28;
+  const MCP_SERVERS = 24, SUGGESTIONS = 29;
   const headings = (html: string) => [...html.matchAll(/<h3 id="[^"]*"[^>]*>([^<]*)/g)].map((match) => match[1]);
   const tiles = (html: string) => [...html.matchAll(/data-app-tile="([^"]*)"/g)].map((match) => match[1]).filter((slug) => !HOSTED_MCP_APPS.some((app) => app.id === slug));
   const server = (name: string, extra: Record<string, unknown> = {}) => ({ name, type: "http", url: `https://${name}.example/mcp`, headerKeys: [], enabled: true, ...extra });

@@ -4,6 +4,7 @@ import { z } from "zod";
 
 import { ROOM_VIEW_ONLY } from "../../shared/app.ts";
 import { approvalModeFor } from "../../shared/approval-mode.ts";
+import { ownedMessageSession, ownedSendSchema } from "../messaging/owned-send.ts";
 import { isPersistentQuestionCard } from "../../shared/ask-question.ts";
 import { normalizeReaction, reactionAnswer } from "../../shared/reactions.ts";
 import type { WidgetAction } from "../../shared/widget.ts";
@@ -71,6 +72,8 @@ export interface BotMessageRouteDeps {
   groupSpeakers: ReadonlyMap<string, { botId: string }>;
   desktopManaged: boolean;
   cloudHome: boolean;
+  /** Personal workspaces only: paired account messages may start tasks with the account's own authority. */
+  ownedMessagesEnabled?(): boolean;
   DirectSendRefused: abstract new (...args: never[]) => { readonly status: number; readonly body: Record<string, unknown> };
   acceptDirectSend(input: DirectSendInput, guardedStart?: (currentAtStart: BotRecord) => Promise<DirectSendReceipt>): Promise<DirectSendReceipt>;
   directSendRefusal(botId: string, threadId: string): { status: number; body: Record<string, unknown> } | null;
@@ -192,13 +195,25 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
   const pressesInFlight = new Map<string, string | undefined>();
   const appMessageRate = new AppMessageRate();
   const route: RouteHandler = async (ctx) => {
-    const { req, res, path, method, auth, json, readBody } = ctx;
+    const { req, res, path, method, auth, json, readBody, url } = ctx;
     let m: RegExpMatchArray | null = null;
     const requirePinnedClientThread = pinnedClientThread(auth, req);
     const routines = deps.routines();
-    m = path.match(/^\/api\/bots\/([\w-]+)\/messages(?:\/(guarded))?$/);
+    m = path.match(/^\/api\/bots\/([\w-]+)\/messages(?:\/(guarded|owned))?$/);
+    const owned = m?.[2] === "owned";
+    if (owned && !ownedMessageSession(auth, !CLOUD_HOME && deps.ownedMessagesEnabled?.() === true)) {
+      return json(res, 403, { error: "A paired personal owner session is required", code: "owned_session" });
+    }
+    if (m && owned && method === "GET") {
+      const threadId = url.searchParams.get("threadId");
+      if (!threadId || !/^[\w-]+$/.test(threadId)) return json(res, 400, { error: "threadId required" });
+      const bot = store.projectBotForTask(m[1], threadId);
+      if (!bot) return json(res, 404, { error: "no such conversation" });
+      res.setHeader("cache-control", "no-store");
+      return json(res, 200, { activeLeafId: store.activeLeaf(threadId), approvalMode: approvalModeFor(bot) });
+    }
     if (m && method === "POST") {
-      const guarded = m[2] === "guarded";
+      const guarded = m[2] === "guarded" || owned;
       const body = await readBody(req);
       if (!body || typeof body !== "object" || Array.isArray(body)) {
         return json(res, 400, { error: "body must be a JSON object" });
@@ -218,7 +233,9 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
       if (mentions === null) return json(res, 400, { error: "mentions must be a list of up to 20 bot ids" });
       if (followUp && (guarded || pressed || fromAnApp)) return json(res, 400, { error: "only a typed message can choose how it meets the running turn" });
       // A distinct route, so an older server answers 404 instead of ignoring the safety preconditions.
-      const guardedBody = guarded ? guardedSendSchema.safeParse(body) : null;
+      const ownedBody = owned ? ownedSendSchema.safeParse(body) : null;
+      if (ownedBody && !ownedBody.success) return json(res, 400, { error: "owned sends require text, threadId, sendId and exact branch and approval preconditions" });
+      const guardedBody = guarded && !owned ? guardedSendSchema.safeParse(body) : null;
       if (guardedBody && !guardedBody.success) {
         const onBehalfOfInvalid = guardedBody.error.issues.some((issue) => issue.path[0] === "onBehalfOf");
         return json(res, 400, { error: onBehalfOfInvalid
@@ -318,8 +335,8 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
             // No await between these checks and startTurn: never steer or enqueue under stale permissions.
             const expectedMode = body.expectedApprovalMode ?? "ask";
             if (approvalModeFor(currentAtStart) !== expectedMode ||
-                (expectedMode === "ask" && (currentAtStart.autoApprove === true || currentAtStart.alwaysAllow?.length))) {
-              throw Object.assign(new Error("guarded sends require the exact expected approval mode; Ask cannot have remembered permissions"), { status: 409, code: "guarded_permissions" });
+                (!owned && expectedMode === "ask" && (currentAtStart.autoApprove === true || currentAtStart.alwaysAllow?.length))) {
+              throw Object.assign(new Error(owned ? "the task's approval mode changed before this message could start" : "guarded sends require the exact expected approval mode; Ask cannot have remembered permissions"), { status: 409, code: "guarded_permissions" });
             }
             if (store.activeLeaf(threadId) !== body.expectedActiveLeafId) {
               throw Object.assign(new Error("the conversation changed before this message could start"), { status: 409, code: "guarded_branch" });
@@ -334,8 +351,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
             if (guardedAdmission.action === "refuse") {
               throw Object.assign(new Error("wait for a free thread slot before retrying this message"), { status: 409, code: "guarded_busy" });
             }
-            // The relayed line is named after the person it is for; with no key it is nobody's own line and acts for nobody.
-            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: onBehalfOf ? { name: onBehalfOf.name ?? onBehalfOf.email! } : sender, trigger, relayed: true, dataContext });
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: onBehalfOf ? { name: onBehalfOf.name ?? onBehalfOf.email! } : sender, trigger, ...(!owned ? { relayed: true } : {}), dataContext });
             return { ok: true as const, threadId, message };
           }
         : undefined;

@@ -27,6 +27,7 @@ export interface StatusRouteDeps {
   cfg: AppConfig;
   staticDir: string | null;
   sharedWorkspaceFullAccessEnabled(): boolean;
+  ownedMessagesEnabled?(): boolean;
   adminActivityRecording(): boolean;
   configStatus(): ConfigStatus;
   broadcast(payload: Record<string, unknown>): void;
@@ -57,6 +58,7 @@ export function createStatusRoutes(deps: StatusRouteDeps): RouteHandler {
       const doctor = doctorSummary();
       return json(res, 200, { app: "openmausbot", ...(version ? { version } : {}), pid: process.pid, static: Boolean(STATIC_DIR), capabilities: {
         guardedMessages: 1, guardedRequests: 1, guardedFullAccess: 1, guardedOnBehalfOf: 1,
+        ...(deps.ownedMessagesEnabled?.() ? { ownedMessages: 1 } : {}),
         ...(sharedWorkspaceFullAccessEnabled() ? { sharedWorkspaceFullAccess: 1 } : {}),
       }, ...(deps.boxOn ? { box: deps.boxOn() ? "on" : "off" } : {}), ...(doctor ? { doctor } : {}) });
     }
