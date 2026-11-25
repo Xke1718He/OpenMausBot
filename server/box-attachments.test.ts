@@ -22,6 +22,18 @@ describe("attachmentsForBox", () => {
   afterEach(() => rmSync(root, { recursive: true, force: true }));
   const run = (text: string, at: string | undefined = cwd, boxed = true) => attachmentsForBox(text, at, undefined, boxed, dataDir, uploads);
 
+  it("keeps metadata's relative file references working when a named batch enters the bot box", () => {
+    const id = "123e4567-e89b-42d3-a456-426614174000", directory = join(uploads, id, "bag");
+    mkdirSync(join(directory, "nested"), { recursive: true });
+    writeFileSync(join(directory, "metadata.yaml"), "nested/record.mcap");
+    writeFileSync(join(directory, "nested", "record.mcap"), "data");
+    const text = `<attached-file path="${join(directory, "metadata.yaml")}" name="metadata.yaml" />\n\n<attached-file path="${join(directory, "nested", "record.mcap")}" name="record.mcap" />`;
+    const output = run(text);
+    const meta = /<attached-file path="([^"]+)"/.exec(output)![1]!;
+    expect(meta).toBe(join(shown, id, "bag", "metadata.yaml"));
+    expect(readFileSync(join(shown, id, "bag", readFileSync(meta, "utf8")), "utf8")).toBe("data");
+  });
+
   it("puts each upload in the conversation's read-only uploads folder and points the engine there", () => {
     const upload = join(uploads, "1f0c2a.md");
     writeFileSync(upload, "# notes\n");

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
+import { isAbsolute } from "node:path";
 
 const userId = z.string().regex(/^ou_[\w-]+$/);
 const chatId = z.string().regex(/^oc_[\w-]+$/);
@@ -17,8 +18,11 @@ export const feishuConfigSchema = z.object({
   botId: z.string().regex(/^[\w-]+$/),
   url: z.string().url(),
   domain: z.enum(["feishu", "lark"]).default("feishu"),
-  allowedUsers: z.array(userId).min(1).max(100),
+  allowedUsers: z.array(userId).max(100),
   allowedChats: z.array(chatId).max(100).default([]),
+  downloadDirectory: z.string().trim().min(1).max(4096).refine(value => Array.from(value).every(char => char.charCodeAt(0) >= 32 && char.charCodeAt(0) !== 127) && (isAbsolute(value) || value === "~" || value.startsWith("~/")), "Use an absolute download directory or ~/").optional(),
+  groupAccess: z.enum(["allowlist", "everyone"]).optional(),
+  groupAccessByChat: z.record(chatId, z.enum(["allowlist", "everyone"])).optional(),
   publicUrl: publicOrigin.optional(),
 }).strict();
 export type FeishuConfig = z.infer<typeof feishuConfigSchema>;

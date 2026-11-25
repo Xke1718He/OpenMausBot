@@ -91,6 +91,7 @@ export function createFirstReplyRescue(deps: FirstReplyRescueDeps): { onEvent(ev
     const name = firstReplyWaitingName(bot.name, ai);
     const row = deps.store.appendMessage(threadId, {
       role: "bot", kind: "activity", turnId: watch.turnId,
+      ...(requestMessageId ? { requestMessageId } : {}),
       ...(speaker && group ? { from: { botId: speaker.botId, name: speaker.name, color: speaker.color } } : {}),
       tool: { name, ok: true, rescue },
     });

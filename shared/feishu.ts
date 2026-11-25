@@ -1,3 +1,5 @@
+export type FeishuGroupAccess = "allowlist" | "everyone";
+
 /** Configuration entered on the Feishu card. Secret values are accepted only on writes and never returned. */
 export interface FeishuConnectionInput {
   appId: string;
@@ -6,6 +8,16 @@ export interface FeishuConnectionInput {
   domain: "feishu" | "lark";
   allowedUsers: string[];
   allowedChats: string[];
+  /** File download folder on the backend host. Accepts an absolute path or ~/; empty uses the attachment store. */
+  downloadDirectory?: string;
+  /** Fallback for groups without an explicit per-chat mode. Defaults to allowlist. */
+  groupAccess?: FeishuGroupAccess;
+  /** Access mode for each chat_id in allowedChats. Private chats always use allowedUsers. */
+  groupAccessByChat?: Record<string, FeishuGroupAccess>;
+}
+
+export function feishuGroupAccess(config: Pick<FeishuConnectionInput, "groupAccess" | "groupAccessByChat">, chatId: string): FeishuGroupAccess {
+  return config.groupAccessByChat?.[chatId] ?? config.groupAccess ?? "allowlist";
 }
 
 /** GET /api/feishu. The saved application secret and internal session token are never exposed. */

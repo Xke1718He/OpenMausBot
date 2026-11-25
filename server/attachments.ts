@@ -11,9 +11,10 @@ import {
   writeFileSync,
 } from "node:fs";
 import { link, open, unlink } from "node:fs/promises";
-import { basename, dirname, extname, join, resolve } from "node:path";
+import { basename, dirname, extname, isAbsolute, join, relative, resolve } from "node:path";
 import { FILE_MAX_BYTES, PREVIEW_MAX_BYTES } from "../shared/upload-limits.ts";
 import { DATA_DIR } from "./config.ts";
+import { attachmentLayoutPath, type AttachmentLayout } from "./attachment-layout.ts";
 import { dropKeptOriginals, dropOrphanKeptOriginals, keepUploadedOriginal, keptOriginalsBytes } from "./attachment-originals.ts";
 import { boxUploadsDir } from "./bot-box/plan.ts";
 
@@ -143,14 +144,13 @@ function scanAttachmentUsageAndCleanup(now = Date.now()): { bytes: number; remov
   ensureAttachmentsDir();
   let bytes = 0;
   let removed = 0;
-  for (const entry of readdirSync(ATTACHMENTS_DIR, { withFileTypes: true })) {
-    if (!entry.isFile()) continue;
-    const path = join(ATTACHMENTS_DIR, entry.name);
+  for (const { path, name } of attachmentEntries()) {
+    const partial = dirname(path) === ATTACHMENTS_DIR && PARTIAL_NAME.test(name);
     // A live partial is counted by its reservation; a crashed process's orphan counts until this scan removes it.
-    if (PARTIAL_NAME.test(entry.name) && activePartials.has(path)) continue;
+    if (partial && activePartials.has(path)) continue;
     try {
       const stat = statSync(path);
-      if (PARTIAL_NAME.test(entry.name) && now - stat.mtimeMs >= ATTACHMENT_PARTIAL_MAX_AGE_MS) {
+      if (partial && now - stat.mtimeMs >= ATTACHMENT_PARTIAL_MAX_AGE_MS) {
         unlinkSync(path);
         removed += 1;
       } else {
@@ -160,6 +160,15 @@ function scanAttachmentUsageAndCleanup(now = Date.now()): { bytes: number; remov
     }
   }
   return { bytes, removed };
+}
+
+function* attachmentEntries(directory = ATTACHMENTS_DIR, prefix = "", depth = 0): Generator<{ path: string; name: string }> {
+  if (depth > 34) return;
+  for (const entry of readdirSync(directory, { withFileTypes: true })) {
+    const path = join(directory, entry.name), name = prefix ? `${prefix}/${entry.name}` : entry.name;
+    if (entry.isFile()) yield { path, name };
+    else if (entry.isDirectory() && (depth > 0 || UPLOAD_ID.test(entry.name))) yield* attachmentEntries(path, name, depth + 1);
+  }
 }
 
 /** Reservations must use this rather than trust a cold cache. */
@@ -214,9 +223,10 @@ export function deleteAttachment(path: string): void {
     // An upload still on disk (a busy file on Windows) keeps its box copies; one already gone loses them.
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
   }
-  if (resolve(dirname(path)) === resolve(ATTACHMENTS_DIR)) {
-    dropBoxUploadCopies([basename(path)]);
-    dropKeptOriginals([basename(path)]);
+  const stored = relative(ATTACHMENTS_DIR, resolve(path));
+  if (stored && !isAbsolute(stored) && !stored.split(/[/\\]/).includes("..")) {
+    dropBoxUploadCopies([stored]);
+    if (!stored.includes("/") && !stored.includes("\\")) dropKeptOriginals([stored]);
   }
 }
 
@@ -255,14 +265,13 @@ export function clearAttachments(kept: ReadonlySet<string>, now = Date.now()): {
   let freedBytes = 0;
   let failed = 0;
   const gone: string[] = [];
-  for (const entry of readdirSync(ATTACHMENTS_DIR, { withFileTypes: true })) {
-    if (!entry.isFile() || PARTIAL_NAME.test(entry.name) || kept.has(entry.name)) continue;
-    const path = join(ATTACHMENTS_DIR, entry.name);
+  for (const { path, name } of attachmentEntries()) {
+    if (dirname(path) === ATTACHMENTS_DIR && PARTIAL_NAME.test(name) || kept.has(name) || kept.has(basename(name))) continue;
     try {
       const { mtimeMs, size } = statSync(path);
       if (now - mtimeMs < ATTACHMENT_CLEAR_MIN_AGE_MS) continue;
       unlinkSync(path);
-      gone.push(entry.name);
+      gone.push(name);
       removed += 1;
       freedBytes += size;
     } catch (error) {
@@ -303,6 +312,9 @@ function cleanupAttachmentPartialsForUpload(uploadId: string): void {
 class AttachmentReservation {
   private held = 0;
   private released = false;
+  private readonly maxBytes: number;
+
+  constructor(maxBytes = FILE_MAX_BYTES) { this.maxBytes = maxBytes; }
 
   reserve(bytes: number): void {
     if (this.released || bytes <= 0) return;
@@ -330,7 +342,7 @@ class AttachmentReservation {
   ensure(bytes: number): void {
     if (bytes <= this.held) return;
     const required = bytes - this.held;
-    const remainingPerFileCapacity = FILE_MAX_BYTES - this.held;
+    const remainingPerFileCapacity = this.maxBytes - this.held;
     const preferred = Math.min(
       Math.max(required, STREAM_RESERVATION_INCREMENT_BYTES),
       remainingPerFileCapacity,
@@ -448,31 +460,34 @@ export function sanitizeSharedFileName(name: string, mime: string): string {
   return `${boundedStem}${extension}`;
 }
 
-/** Never buffers the request; a failed, empty or oversized upload leaves no partial file. */
+/** Never buffers the request; a failed or oversized upload leaves no partial file. Empty files require allowEmpty. */
 export async function saveFile(
   chunks: AsyncIterable<Uint8Array>,
   originalName: string,
   mime: string,
   /** keepOriginal: the person's own upload, kept as sent (attachment-originals.ts). */
-  options: { uploadId?: string; expectedBytes?: number; keepOriginal?: boolean } = {},
+  options: { uploadId?: string; expectedBytes?: number; maxBytes?: number; keepOriginal?: boolean; allowEmpty?: boolean; layout?: AttachmentLayout } = {},
 ): Promise<SavedFile> {
   const known = extensionForFileMime(mime);
   const normalized = known ? normalizedMime(mime)! : GENERIC_FILE_MIME;
   const extension = known ?? GENERIC_FILE_EXTENSION;
-  const name = sanitizeSharedFileName(originalName, normalized);
+  const name = options.layout ? originalName : sanitizeSharedFileName(originalName, normalized);
   const uploadId = validateAttachmentUploadId(options.uploadId);
   const expectedBytes = options.expectedBytes;
+  const maxBytes = options.maxBytes ?? FILE_MAX_BYTES;
+  if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) throw statusError(400, "invalid file size limit");
   if (expectedBytes !== undefined && (!Number.isSafeInteger(expectedBytes) || expectedBytes < 0)) {
     throw statusError(400, "content-length must be a non-negative integer");
   }
-  if (expectedBytes !== undefined && expectedBytes > FILE_MAX_BYTES) {
-    throw statusError(413, `file exceeds ${FILE_MAX_BYTES} bytes`);
+  if (expectedBytes !== undefined && expectedBytes > maxBytes) {
+    throw statusError(413, `file exceeds ${maxBytes} bytes`);
   }
 
   return withUploadLock(uploadId, async () => {
     ensureAttachmentsDir();
     if (uploadId) cleanupAttachmentPartialsForUpload(uploadId);
-    const existing = uploadId ? committedPathForUpload(uploadId, extension) : null;
+    const structured = options.layout ? await attachmentLayoutPath(ATTACHMENTS_DIR, options.layout, name) : undefined;
+    const existing = structured ? statSizeIfFile(structured) !== null ? structured : null : uploadId ? committedPathForUpload(uploadId, extension) : null;
     if (existing) {
       const incomingHash = createHash("sha256");
       let bytes = 0;
@@ -481,13 +496,13 @@ export async function saveFile(
           ? value
           : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
         if (chunk.byteLength === 0) continue;
-        if (bytes + chunk.byteLength > FILE_MAX_BYTES) {
-          throw statusError(413, `file exceeds ${FILE_MAX_BYTES} bytes`);
+        if (bytes + chunk.byteLength > maxBytes) {
+          throw statusError(413, `file exceeds ${maxBytes} bytes`);
         }
         incomingHash.update(chunk);
         bytes += chunk.byteLength;
       }
-      if (bytes === 0) throw statusError(400, "empty file");
+      if (bytes === 0 && !options.allowEmpty) throw statusError(400, "empty file");
       if (statSync(existing).size !== bytes || await digestFile(existing) !== incomingHash.digest("hex")) {
         throw statusError(409, "uploadId was already used for different file bytes");
       }
@@ -495,9 +510,9 @@ export async function saveFile(
     }
 
     const id = uploadId ?? randomUUID();
-    const path = join(ATTACHMENTS_DIR, `${id}${extension}`);
+    const path = structured ?? join(ATTACHMENTS_DIR, `${id}${extension}`);
     const partialPath = join(ATTACHMENTS_DIR, `.openmaus-upload-${id}-${randomUUID()}.partial`);
-    const reservation = new AttachmentReservation();
+    const reservation = new AttachmentReservation(maxBytes);
     if (expectedBytes) reservation.reserve(expectedBytes);
     activePartials.add(partialPath);
     let file: Awaited<ReturnType<typeof open>> | undefined;
@@ -512,8 +527,8 @@ export async function saveFile(
           ? value
           : Buffer.from(value.buffer, value.byteOffset, value.byteLength);
         if (chunk.byteLength === 0) continue;
-        if (bytes + chunk.byteLength > FILE_MAX_BYTES) {
-          throw statusError(413, `file exceeds ${FILE_MAX_BYTES} bytes`);
+        if (bytes + chunk.byteLength > maxBytes) {
+          throw statusError(413, `file exceeds ${maxBytes} bytes`);
         }
         reservation.ensure(bytes + chunk.byteLength);
         let offset = 0;
@@ -524,7 +539,7 @@ export async function saveFile(
         }
         bytes += chunk.byteLength;
       }
-      if (bytes === 0) throw statusError(400, "empty file");
+      if (bytes === 0 && !options.allowEmpty) throw statusError(400, "empty file");
       await file.close();
       closed = true;
       try {

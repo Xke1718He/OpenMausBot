@@ -39,6 +39,7 @@ it("posts one rescue notice into a silent first reply, readable as plain text, a
     }, { timeout: 20_000, interval: 200 });
     expect(notice).toMatchObject({ role: "bot", kind: "activity", turnId: expect.any(String) });
     const asked = (await messages(threadId)).find((message) => message.role === "user" && message.text === "Hello?");
+    expect(notice.requestMessageId).toBe(asked.id);
     expect(notice.tool).toEqual({
       name: `notice: Maus hasn't heard back from ${ai} yet.`,
       ok: true,
@@ -56,6 +57,7 @@ it("posts one rescue notice into a silent first reply, readable as plain text, a
       ok: true,
       rescue: { botId: bot.id, threadId, turnId: notice.turnId, requestMessageId: asked.id, instanceId, ai, settled: true },
     });
+    expect(after.find((message) => message.id === notice.id).requestMessageId).toBe(asked.id);
     expect(after.some((message) => message.kind === "text" && message.text === "released")).toBe(true);
   } finally {
     stream.close();

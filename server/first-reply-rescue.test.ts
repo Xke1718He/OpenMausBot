@@ -67,7 +67,7 @@ describe("first-reply rescue", () => {
     vi.advanceTimersByTime(1);
     expect(rows()).toHaveLength(1);
     expect(rows()[0]).toMatchObject({
-      role: "bot", kind: "activity", turnId: "turn-1",
+      role: "bot", kind: "activity", turnId: "turn-1", requestMessageId: "request-of-turn-1",
       tool: {
         // The plain line every older client (the phones) prints as it is.
         name: "notice: Maus hasn't heard back from OpenCode yet.",
@@ -110,6 +110,7 @@ describe("first-reply rescue", () => {
       ok: true,
       rescue: { botId: "bot-1", instanceId: "opencodeGo", ai: "OpenCode", settled: true },
     });
+    expect(rows()[0]!.requestMessageId).toBe("request-of-turn-1");
     rescue.onEvent(event({ type: "item.completed", turnId: "turn-1", itemType: "assistant_text", text: "Hello" }));
     expect(rows()).toHaveLength(1);
   });

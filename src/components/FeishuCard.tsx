@@ -1,14 +1,14 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import { Check, Loader2, MessageSquare, MoreHorizontal } from "lucide-react";
 import { api, useStore } from "@/state/store";
 import { t } from "@/lib/i18n";
-import type { FeishuConnectionInput, FeishuConnectionStatus } from "../../shared/feishu";
+import { feishuGroupAccess, type FeishuConnectionInput, type FeishuConnectionStatus } from "../../shared/feishu";
 import { SidebarPopoverMenu } from "./SidebarPopoverMenu";
+import { collectFeishuIds, FeishuAccessEditor } from "./FeishuAccessEditor";
 
 const pill = "inline-flex h-7 shrink-0 items-center justify-center gap-2 rounded-full bg-control/80 px-3 text-[13px] font-medium text-ink transition-colors hover:bg-raised-hover disabled:opacity-50";
 const field = "h-8 w-full min-w-0 rounded-lg bg-inset px-2.5 text-[13px] text-ink focus:outline-none focus:ring-1 focus:ring-focus";
 const empty = { appId: "", appSecret: "", botId: "", domain: "feishu" as const, allowedUsers: [], allowedChats: [] };
-const ids = (value: string) => [...new Set(value.split(/[\s,;]+/).filter(Boolean))];
 
 export function FeishuCard({ refreshKey = 0, onConnection }: { refreshKey?: number; onConnection?: (connected: boolean | null) => void }) {
   const { state } = useStore();
@@ -24,8 +24,14 @@ export function FeishuCard({ refreshKey = 0, onConnection }: { refreshKey?: numb
   const mounted = useRef(true);
   const version = useRef(0);
   const saving = useRef(false);
+  const secretHintId = useId();
   const connected = status?.state === "connected";
   const pending = status?.state === "connecting" || status?.state === "reconnecting";
+  const nextUsers = collectFeishuIds(draft.allowedUsers, users, "user");
+  const nextChats = collectFeishuIds(draft.allowedChats, chats, "chat");
+  const secretKept = Boolean(status?.saved && status.configuration?.appId === draft.appId && status.configuration.domain === draft.domain);
+  const canSave = draft.appId.trim() && draft.botId && !nextUsers.error && !nextChats.error
+    && (nextUsers.ids.length > 0 || nextChats.ids.some(id => feishuGroupAccess(draft, id) === "everyone")) && (draft.appSecret?.trim() || secretKept);
 
   const load = useCallback(async () => {
     if (saving.current) return;
@@ -55,17 +61,20 @@ export function FeishuCard({ refreshKey = 0, onConnection }: { refreshKey?: numb
 
   const configure = () => {
     const configuration = status?.configuration;
-    setDraft(configuration ? { ...configuration, appSecret: "" } : { ...empty, botId: bots[0]?.id ?? "" });
-    setUsers(configuration?.allowedUsers.join("\n") ?? "");
-    setChats(configuration?.allowedChats.join("\n") ?? "");
+    setDraft(configuration ? { ...configuration, appSecret: "", groupAccess: undefined,
+      groupAccessByChat: Object.fromEntries(configuration.allowedChats.map(id => [id, feishuGroupAccess(configuration, id)])),
+    } : { ...empty, botId: bots[0]?.id ?? "" });
+    setUsers(""); setChats("");
     setError(null); setEditing(true);
   };
   const save = async () => {
-    if (saving.current) return;
+    if (saving.current || !canSave) return;
     saving.current = true; version.current++; setBusy(true); setError(null);
     try {
       const next = await api("/api/feishu", { method: "PUT", body: JSON.stringify({ ...draft,
-        appSecret: draft.appSecret?.trim() || undefined, allowedUsers: ids(users), allowedChats: ids(chats),
+        appSecret: draft.appSecret?.trim() || undefined, groupAccess: undefined, allowedUsers: nextUsers.ids, allowedChats: nextChats.ids,
+        downloadDirectory: draft.downloadDirectory?.trim() || undefined,
+        groupAccessByChat: Object.fromEntries(nextChats.ids.map(id => [id, feishuGroupAccess(draft, id)])),
       }) }) as FeishuConnectionStatus;
       if (!mounted.current) return;
       setStatus(next); setDraft(current => ({ ...current, appSecret: "" })); setEditing(false);
@@ -91,7 +100,6 @@ export function FeishuCard({ refreshKey = 0, onConnection }: { refreshKey?: numb
   const description = blocked ? t("feishu.blocked") : pending ? t("feishu.connecting") : status?.state === "error" ? t("feishu.connectionError")
     : connected ? t("feishu.connectedTo", { name: bots.find(bot => bot.id === status.configuration?.botId)?.name ?? t("feishu.bot") }) : t("feishu.description");
   const label = (key: "appId" | "appSecret" | "bot" | "users" | "chats" | "domain") => t(`feishu.${key}`);
-  const canSave = draft.appId.trim() && draft.botId && ids(users).length > 0 && (draft.appSecret?.trim() || status?.saved);
 
   return <div data-app-tile="feishu" data-feishu-state={status?.state ?? "loading"} className="flex min-w-0 flex-col rounded-xl px-2 py-2 transition-colors hover:bg-raised/40">
     <div className="flex items-center gap-3">
@@ -113,10 +121,15 @@ export function FeishuCard({ refreshKey = 0, onConnection }: { refreshKey?: numb
       <p className="text-[12px] leading-5 text-ink-secondary">{t("feishu.setupHint")}{" "}<a className="text-accent-text underline underline-offset-2" href="https://open.feishu.cn/app" target="_blank" rel="noopener noreferrer">{t("feishu.openConsole")}</a></p>
       <label className="flex flex-col gap-1 text-[12px] text-ink-secondary">{label("domain")}<select aria-label={label("domain")} className={field} disabled={busy} value={draft.domain} onChange={event => setDraft(current => ({ ...current, domain: event.target.value as "feishu" | "lark" }))}><option value="feishu">Feishu</option><option value="lark">Lark</option></select></label>
       <label className="flex flex-col gap-1 text-[12px] text-ink-secondary">{label("appId")}<input className={field} value={draft.appId} disabled={busy} autoComplete="off" spellCheck={false} dir="ltr" required onChange={event => setDraft(current => ({ ...current, appId: event.target.value }))} /></label>
-      <label className="flex flex-col gap-1 text-[12px] text-ink-secondary">{label("appSecret")}<input aria-label={label("appSecret")} className={field} type="password" value={draft.appSecret ?? ""} disabled={busy} autoComplete="new-password" required={!status?.saved} onChange={event => setDraft(current => ({ ...current, appSecret: event.target.value }))} />{status?.saved && <span>{t("feishu.keepSecret")}</span>}</label>
+      <label className="flex flex-col gap-1 text-[12px] text-ink-secondary">{label("appSecret")}<input aria-label={label("appSecret")} aria-describedby={secretKept ? secretHintId : undefined} className={field} type="password" value={draft.appSecret ?? ""} placeholder={secretKept ? "****************" : undefined} disabled={busy} autoComplete="new-password" required={!secretKept} onChange={event => setDraft(current => ({ ...current, appSecret: event.target.value }))} />{secretKept && <span id={secretHintId}>{t("feishu.keepSecret")}</span>}</label>
       <label className="flex flex-col gap-1 text-[12px] text-ink-secondary">{label("bot")}<select aria-label={label("bot")} className={field} value={draft.botId} disabled={busy} required onChange={event => setDraft(current => ({ ...current, botId: event.target.value }))}><option value="" disabled>{t("feishu.chooseBot")}</option>{bots.map(bot => <option key={bot.id} value={bot.id}>{bot.name}</option>)}</select></label>
-      <label className="flex flex-col gap-1 text-[12px] text-ink-secondary">{label("users")}<textarea className={`${field} h-16 py-2`} value={users} disabled={busy} spellCheck={false} dir="ltr" required placeholder="ou_…" onChange={event => setUsers(event.target.value)} /></label>
-      <label className="flex flex-col gap-1 text-[12px] text-ink-secondary">{label("chats")}<textarea aria-label={label("chats")} className={`${field} h-16 py-2`} value={chats} disabled={busy} spellCheck={false} dir="ltr" placeholder="oc_…" onChange={event => setChats(event.target.value)} /><span>{t("feishu.chatsHint")}</span></label>
+      <label className="flex flex-col gap-1 text-[12px] text-ink-secondary">{t("feishu.downloadDirectory")}<input aria-label={t("feishu.downloadDirectory")} className={field} value={draft.downloadDirectory ?? ""} placeholder="~/download" disabled={busy} autoComplete="off" spellCheck={false} dir="auto" onChange={event => setDraft(current => ({ ...current, downloadDirectory: event.target.value }))} /><span>{t("feishu.downloadDirectoryHint")}</span></label>
+      <FeishuAccessEditor kind="user" label={label("users")} value={draft.allowedUsers} entry={users} disabled={busy} fieldClassName={field}
+        onEntryChange={setUsers} onChange={allowedUsers => setDraft(current => ({ ...current, allowedUsers }))} />
+      <FeishuAccessEditor kind="chat" label={label("chats")} value={draft.allowedChats} entry={chats} disabled={busy} fieldClassName={field} modes={draft}
+        onEntryChange={setChats} onChange={allowedChats => setDraft(current => ({ ...current, allowedChats,
+          groupAccessByChat: Object.fromEntries(allowedChats.map(id => [id, feishuGroupAccess(current, id)])),
+        }))} onAccessChange={(id, mode) => setDraft(current => ({ ...current, groupAccessByChat: { ...current.groupAccessByChat, [id]: mode } }))} />
       <p className="text-[12px] leading-5 text-ink-secondary">{t("feishu.accountHint")}</p>
       <div className="flex gap-2"><button type="submit" className={pill} disabled={busy || !canSave}>{t(busy ? "feishu.saving" : "feishu.save")}</button><button type="button" className={pill} disabled={busy} onClick={() => { setEditing(false); setDraft(current => ({ ...current, appSecret: "" })); setError(null); }}>{t("feishu.cancel")}</button></div>
     </form>}

@@ -1,5 +1,6 @@
-import { constants, copyFileSync, existsSync, linkSync, mkdirSync, renameSync, rmSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { constants, copyFileSync, existsSync, linkSync, lstatSync, mkdirSync, realpathSync, renameSync, rmSync } from "node:fs";
+import { basename, dirname, join, relative, resolve } from "node:path";
+import { attachmentBatchId, attachmentRelativePath } from "./attachment-layout.ts";
 import { decodeAttachmentAttribute, escapeAttribute } from "../src/lib/composer-attachments.ts";
 import { ATTACHMENTS_DIR } from "./attachments.ts";
 import { botBox } from "./bot-box/box.ts";
@@ -22,13 +23,15 @@ export function attachmentsForBox(text: string, cwd: string | undefined, turn?: 
   if (!ids) return text;
   const uploads = resolve(attachmentsDir), shown = boxUploadsDir(resolve(dataDir), ids.botId, ids.threadId);
   return text.replace(TAG, (tag, open: string, raw: string, close: string) => {
-    const path = decodeAttachmentAttribute(raw), name = basename(path);
-    if (resolve(dirname(path)) !== uploads || !NAME.test(name) || !existsSync(path)) return tag;
-    const target = join(shown, name);
+    const path = decodeAttachmentAttribute(raw), name = basename(path), stored = relative(uploads, resolve(path)).replaceAll("\\", "/");
+    const nested = stored.includes("/") && attachmentBatchId.safeParse(stored.split("/")[0]).success && attachmentRelativePath.safeParse(stored.split("/").slice(1).join("/")).success;
+    if (!(nested || resolve(dirname(path)) === uploads && NAME.test(name)) || !existsSync(path)) return tag;
+    const target = join(shown, stored);
     try {
+      if (nested && (!lstatSync(path).isFile() || realpathSync(path) !== join(realpathSync(uploads), stored))) return tag;
       // Uploads never change under their name, so one an earlier turn put here is kept.
       if (!existsSync(target)) {
-        mkdirSync(shown, { recursive: true, mode: 0o700 });
+        mkdirSync(dirname(target), { recursive: true, mode: 0o700 });
         try {
           linkSync(path, target);
         } catch {

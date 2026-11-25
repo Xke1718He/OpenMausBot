@@ -13,6 +13,7 @@ import type { ResolvedSender } from "../../shared/wire.ts";
 import { admit } from "../admission.ts";
 import { dismissQuestionCard } from "../card-dismissal.ts";
 import { AppMessageRate, appContextBlock, prepareAppMessage } from "../chat-apps.ts";
+import { attachmentContextPrompt, attachmentContextSchema } from "../messaging/attachment-context.ts";
 import { prepareWidgetPress, reopenCancelledPress } from "../chat-widgets.ts";
 import type { ModelSelection, RequestOutcome, SteerOutcome } from "../contracts.ts";
 import { parseDataContext, type DataContext } from "../data-context.ts";
@@ -80,6 +81,7 @@ export interface BotMessageRouteDeps {
   startTurn(botId: string, text: string, opts?: {
     threadId?: string; replyTo?: Message; sendId?: string; sender?: ResolvedSender; trigger?: UsageTrigger; relayed?: boolean;
     dataContext?: DataContext; compactOnly?: boolean; cardContinuation?: boolean; editedMessageId?: string;
+    app?: { context?: string; fromApp?: Message["fromApp"]; pointed?: Message["pointed"] };
   }): Promise<Message>;
   /** Retry on a line a caller sent through the Bot API, run as that call ran (bot-api-host.ts); null for any other line. */
   botApiRetry?(botId: string, threadId: string, source: Message, sendId?: string): Promise<Message | null>;
@@ -165,6 +167,7 @@ const guardedSendSchema = z.object({
   expectedActiveLeafId: z.string().regex(/^[\w-]+$/).nullable(),
   expectedApprovalMode: z.enum(["ask", "full"]).optional(),
   replyToId: z.string().optional(),
+  attachmentContext: attachmentContextSchema.optional(),
   onBehalfOf: z.object({
     email: z.string().trim().toLowerCase().max(254).pipe(z.email()).optional(),
     name: z.string().trim().min(1).max(120).optional(),
@@ -321,7 +324,8 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
       if (appSent && !slot) return json(res, 429, { error: "This app has sent too many messages. Wait a while, or type your message." });
       // A relay is not the person at this screen: it never carries what their apps last showed.
       const appContext = guarded || retried ? null : appContextBlock(store, threadId);
-      const context = `${appContext?.block ?? ""}${openPage ?? ""}${pointed?.block ?? ""}`;
+      const attachmentContext = ownedBody?.data?.attachmentContext ?? guardedBody?.data?.attachmentContext;
+      const context = `${attachmentContextPrompt(attachmentContext)}${appContext?.block ?? ""}${openPage ?? ""}${pointed?.block ?? ""}`;
       const app = context || appSent || pointed
         ? {
             ...(context ? { context } : {}),
@@ -351,7 +355,7 @@ export function createBotMessageRoutes(deps: BotMessageRouteDeps): RouteHandler 
             if (guardedAdmission.action === "refuse") {
               throw Object.assign(new Error("wait for a free thread slot before retrying this message"), { status: 409, code: "guarded_busy" });
             }
-            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: onBehalfOf ? { name: onBehalfOf.name ?? onBehalfOf.email! } : sender, trigger, ...(!owned ? { relayed: true } : {}), dataContext });
+            const message = await startTurn(bot.id, text, { threadId, replyTo, sendId, sender: onBehalfOf ? { name: onBehalfOf.name ?? onBehalfOf.email! } : sender, trigger, ...(!owned ? { relayed: true } : {}), dataContext, ...(app ? { app } : {}) });
             return { ok: true as const, threadId, message };
           }
         : undefined;

@@ -13,7 +13,7 @@ import type { SessionRegistry } from "../../server/sessions.ts";
 
 export const FEISHU_FIXTURE_SECRET = "fake-feishu-secret";
 export async function launchFeishuFixture() {
-  const fixture = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_TOOL_CALLS: "[]", FAKE_CLAUDE_REPLIES: JSON.stringify(["Feishu fixture answer"]) });
+  const fixture = await launchVerificationServer({ ...process.env, FAKE_CLAUDE_TOOL_CALLS: "[]", FAKE_CLAUDE_REPLIES: JSON.stringify(Array<string>(4).fill("Feishu fixture answer")) });
   const api = fixtureApi(fixture.info.url, { headers: { origin: fixture.info.url } });
   const platform = new FakeFeishu();
   await platform.listen();

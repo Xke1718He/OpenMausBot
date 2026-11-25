@@ -78,6 +78,24 @@ function resetDir() {
 const UPLOAD_A = "11111111-1111-4111-8111-111111111111";
 const UPLOAD_B = "22222222-2222-4222-8222-222222222222";
 
+describe("named attachment batches", () => {
+  beforeEach(resetDir); afterEach(resetDir);
+  it("accounts and clears nested saved files while keeping original filenames and relative references", async () => {
+    const chunks = async function* () { yield Buffer.from("data"); };
+    const options = { uploadId: UPLOAD_B, layout: { batchId: UPLOAD_A, relativePath: "bag/nested/record.mcap" } };
+    const saved = await saveFile(chunks(), "record.mcap", "application/octet-stream", options);
+    expect(saved.path).toBe(join(ATTACHMENTS_DIR, UPLOAD_A, "bag", "nested", "record.mcap"));
+    expect((await saveFile(chunks(), "record.mcap", "application/octet-stream", options)).path).toBe(saved.path);
+    expect(attachmentStorageUsage().usedBytes).toBe(4);
+    __resetAttachmentAccountingForTests();
+    expect(attachmentStorageUsage().usedBytes).toBe(4);
+    const old = new Date(Date.now() - ATTACHMENT_CLEAR_MIN_AGE_MS - 1000); utimesSync(saved.path, old, old);
+    expect(clearAttachments(new Set())).toMatchObject({ removed: 1, freedBytes: 4 });
+    expect(existsSync(saved.path)).toBe(false);
+    expect(attachmentStorageUsage().usedBytes).toBe(0);
+  });
+});
+
 describe("extensionForMime", () => {
   it("maps the accepted image mimes to extensions", () => {
     expect(extensionForMime("image/png")).toBe(".png");
@@ -668,6 +686,20 @@ describe("shared files", () => {
     })(), "Report.pdf", "application/pdf", { uploadId: UPLOAD_A }))
       .rejects.toMatchObject({ status: 409 });
     expect(readFileSync(first.path, "utf8")).toBe("same document");
+  });
+
+  it("streams connector files above the web limit while retaining quota accounting and retry receipts", async () => {
+    const total = FILE_MAX_BYTES + 1;
+    const chunks = async function* () {
+      const chunk = Buffer.alloc(1024 * 1024, 97);
+      for (let offset = 0; offset < total; offset += chunk.length) yield chunk.subarray(0, Math.min(chunk.length, total - offset));
+    };
+    const saved = await saveFile(chunks(), "capture.mcap", "application/octet-stream", { uploadId: UPLOAD_A, maxBytes: ATTACHMENTS_MAX_BYTES });
+    expect(statSync(saved.path).size).toBe(total);
+    expect((await saveFile(chunks(), "capture.mcap", "application/octet-stream", { uploadId: UPLOAD_A, maxBytes: ATTACHMENTS_MAX_BYTES })).path).toBe(saved.path);
+    await expect(saveFile(chunks(), "web.mcap", "application/octet-stream")).rejects.toMatchObject({ status: 413 });
+    await expect(saveFile(chunks(), "quota.mcap", "application/octet-stream", { expectedBytes: ATTACHMENTS_MAX_BYTES - total + 1, maxBytes: ATTACHMENTS_MAX_BYTES })).rejects.toMatchObject({ status: 507 });
+    expect(readdirSync(ATTACHMENTS_DIR)).toEqual([saved.path.split(/[\\/]/).at(-1)]);
   });
 
   it("serializes the upload ID namespace across image and document routes", async () => {
