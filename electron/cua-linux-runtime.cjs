@@ -4,6 +4,7 @@ const fs = require("node:fs");
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
+const { inspectX11Compatibility } = require("./x11-compat.cjs");
 const {
   CERTIFIED_DRIVER_VERSION,
   desktopCommandEnvironment,
@@ -143,8 +144,8 @@ function writePrivateJson(file, value, {
   }
 }
 
-function createLinuxCuaPreferenceStore({ getUserData, fileSystem = fs } = {}) {
-  const preferencePath = () => path.join(getUserData(), "cua-local-control.json");
+function createLinuxCuaPreferenceStore({ getUserData, fileSystem = fs, fileName = "cua-local-control.json" } = {}) {
+  const preferencePath = () => path.join(getUserData(), fileName);
   return Object.freeze({
     read() {
       try {
@@ -432,7 +433,7 @@ function publicRuntimeStatus(connection) {
     enabled: connection.enabled === true,
     status:
       connection.status ??
-      (["linux-x11-supervised", "linux-wayland-gnome-supervised", "linux-wayland-hyprland-supervised"].includes(connection.mode)
+      (["linux-x11-supervised", "linux-x11-compat-supervised", "linux-wayland-gnome-supervised", "linux-wayland-hyprland-supervised"].includes(connection.mode)
         ? "ready"
         : "unavailable"),
     reasonCode: connection.reasonCode,
@@ -509,12 +510,13 @@ function createUnavailableLinuxRuntime({
 function createLinuxCuaRuntime({
   getUserData,
   connectionStore,
-  preferenceStore = createLinuxCuaPreferenceStore({ getUserData }),
+  backend = "cua",
+  preferenceStore = createLinuxCuaPreferenceStore({ getUserData, fileName: backend === "x11-compat" ? "x11-local-control.json" : "cua-local-control.json" }),
   platform = process.platform,
   arch = process.arch,
   env = process.env,
   bundledDriverPath,
-  inspect = inspectLinuxCuaDriver,
+  inspect = backend === "x11-compat" ? inspectX11Compatibility : inspectLinuxCuaDriver,
   spawnProcess = spawn,
   probe = probePrivateDaemon,
   healthProbe = probeWaylandHealth,
@@ -700,11 +702,16 @@ function createLinuxCuaRuntime({
         );
       }
 
-      const childEnv = desktopCommandEnvironment(env, {
+      const bridgeEnv = backend === "x11-compat" ? {
+        ELECTRON_RUN_AS_NODE: "1", OMB_X11_NODE: process.execPath, OMB_X11_EMBEDDED: "1", OMB_X11_HOST_BUNDLE_ID: HOST_BUNDLE_ID,
+      } : {
         CUA_DRIVER_EMBEDDED: "1",
         CUA_DRIVER_HOST_BUNDLE_ID: HOST_BUNDLE_ID,
-        CUA_DRIVER_PARENT_LIVENESS_STDIN: "1",
         ...(runtimeSession === "wayland" ? { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" } : {}),
+      };
+      const childEnv = desktopCommandEnvironment(env, {
+        ...bridgeEnv,
+        [backend === "x11-compat" ? "OMB_X11_PARENT_LIVENESS_STDIN" : "CUA_DRIVER_PARENT_LIVENESS_STDIN"]: "1",
       });
       const args = [
         "serve",
@@ -777,7 +784,7 @@ function createLinuxCuaRuntime({
           schemaVersion: CONNECTION_SCHEMA_VERSION,
           mode:
             runtimeSession !== "wayland"
-              ? "linux-x11-supervised"
+              ? backend === "x11-compat" ? "linux-x11-compat-supervised" : "linux-x11-supervised"
               : inspected.compositor === "hyprland"
                 ? "linux-wayland-hyprland-supervised"
                 : "linux-wayland-gnome-supervised",
@@ -807,14 +814,8 @@ function createLinuxCuaRuntime({
           mcp: {
             command: inspected.path,
             args: ["mcp", "--embedded", "--socket", socketPath],
-            env: {
-              CUA_DRIVER_EMBEDDED: "1",
-              CUA_DRIVER_HOST_BUNDLE_ID: HOST_BUNDLE_ID,
-              CUA_DRIVER_RS_UPDATE_CHECK: "false",
-              CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
-              ...(runtimeSession === "wayland"
-                ? { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" }
-                : {}),
+            env: backend === "x11-compat" ? bridgeEnv : {
+              ...bridgeEnv, CUA_DRIVER_RS_UPDATE_CHECK: "false", CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
             },
           },
           toolNames: handshake.tools,

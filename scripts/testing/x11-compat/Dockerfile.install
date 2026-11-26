@@ -1,0 +1,6 @@
+ARG BASE_IMAGE=openmausbot-x11-verify:ubuntu20.04
+FROM ${BASE_IMAGE}
+USER root
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends apparmor xdg-utils && rm -rf /var/lib/apt/lists/*
+CMD ["node", "/fixture/install.mjs"]

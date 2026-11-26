@@ -1,6 +1,6 @@
 import { lstatSync, readFileSync, realpathSync, statSync } from "node:fs";
 import type { Stats } from "node:fs";
-import { dirname, isAbsolute, join } from "node:path";
+import { basename, dirname, isAbsolute, join } from "node:path";
 import { SPAWNED_PROXIES } from "./proxy-paths.ts";
 
 export const REQUIRED_LINUX_TOOLS = ["click", "get_window_state", "list_apps", "type_text"];
@@ -150,7 +150,8 @@ function acceptedDriverVersion(version: unknown, source: unknown, hyprland: bool
 
 export function decodeLinuxDescriptor(value: LinuxConnectionDescriptor): LocalComputerConnection | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const x11 = value.mode === "linux-x11-supervised" && value.session === "x11";
+  const compatibility = value.mode === "linux-x11-compat-supervised" && value.session === "x11";
+  const x11 = (value.mode === "linux-x11-supervised" || compatibility) && value.session === "x11";
   const hyprland =
     value.mode === "linux-wayland-hyprland-supervised" &&
     value.session === "wayland" &&
@@ -194,6 +195,12 @@ export function decodeLinuxDescriptor(value: LinuxConnectionDescriptor): LocalCo
   const driver = value.driver as Record<string, unknown>;
   const daemon = value.daemon as Record<string, unknown>;
   const mcp = value.mcp as Record<string, unknown>;
+  const expectedEnvironment: Record<string, string> = compatibility ? {
+    ELECTRON_RUN_AS_NODE: "1", OMB_X11_NODE: process.execPath, OMB_X11_EMBEDDED: "1", OMB_X11_HOST_BUNDLE_ID: "com.openmausbot.app",
+  } : {
+    CUA_DRIVER_EMBEDDED: "1", CUA_DRIVER_HOST_BUNDLE_ID: "com.openmausbot.app", CUA_DRIVER_RS_UPDATE_CHECK: "false", CUA_DRIVER_RS_TELEMETRY_ENABLED: "false",
+    ...(wayland ? { CUA_DRIVER_RS_ENABLE_WAYLAND: "1" } : {}),
+  };
   if (
     !driver ||
     !daemon ||
@@ -217,7 +224,9 @@ export function decodeLinuxDescriptor(value: LinuxConnectionDescriptor): LocalCo
   if (
     typeof driver.path !== "string" ||
     !isAbsolute(driver.path) ||
-    !acceptedDriverVersion(driver.version, driver.source, hyprland) ||
+    !(compatibility
+      ? driver.version === "1.0.0" && driver.source === "x11-compat" && basename(driver.path) === "openmausbot-x11.cjs"
+      : acceptedDriverVersion(driver.version, driver.source, hyprland)) ||
     driver.manifestSchema !== "1" ||
     !validDriverFileIdentity(driver.fileIdentity) ||
     typeof daemon.socketPath !== "string" ||
@@ -238,18 +247,8 @@ export function decodeLinuxDescriptor(value: LinuxConnectionDescriptor): LocalCo
     !mcp.env ||
     typeof mcp.env !== "object" ||
     Array.isArray(mcp.env) ||
-    !exactKeys(mcp.env as Record<string, unknown>, [
-      "CUA_DRIVER_EMBEDDED",
-      "CUA_DRIVER_HOST_BUNDLE_ID",
-      "CUA_DRIVER_RS_UPDATE_CHECK",
-      "CUA_DRIVER_RS_TELEMETRY_ENABLED",
-      ...(wayland ? ["CUA_DRIVER_RS_ENABLE_WAYLAND"] : []),
-    ]) ||
-    (mcp.env as Record<string, unknown>).CUA_DRIVER_EMBEDDED !== "1" ||
-    (mcp.env as Record<string, unknown>).CUA_DRIVER_HOST_BUNDLE_ID !== "com.openmausbot.app" ||
-    (mcp.env as Record<string, unknown>).CUA_DRIVER_RS_UPDATE_CHECK !== "false" ||
-    (mcp.env as Record<string, unknown>).CUA_DRIVER_RS_TELEMETRY_ENABLED !== "false" ||
-    (wayland && (mcp.env as Record<string, unknown>).CUA_DRIVER_RS_ENABLE_WAYLAND !== "1")
+    !exactKeys(mcp.env as Record<string, unknown>, Object.keys(expectedEnvironment)) ||
+    Object.entries(expectedEnvironment).some(([key, expected]) => (mcp.env as Record<string, unknown>)[key] !== expected)
   ) {
     return null;
   }

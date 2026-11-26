@@ -268,6 +268,25 @@ describe("unavailable Linux CUA runtime", () => {
 
 // Windows lacks the POSIX executable and Unix-socket semantics this exercises; short canonical temp paths keep it portable.
 describe.skipIf(process.platform === "win32")("Linux CUA opt-in and lifecycle", () => {
+  it("requires a separate opt-in for compatibility control of the shared pointer", async () => {
+    const context = harness({ preferenceEnabled: true, runtimeOptions: { backend: "x11-compat", preferenceStore: undefined } });
+    expect((await context.runtime.initialize()).status).toBe("disabled");
+    expect(context.inspect).not.toHaveBeenCalled();
+    expect(context.spawnProcess).not.toHaveBeenCalled();
+  });
+
+  it("publishes the compatibility transport without leaking ambient credentials", async () => {
+    const context = harness({ inspected: { driverVersion: "1.0.0", source: "x11-compat" }, runtimeOptions: { backend: "x11-compat" } });
+    const ready = await context.runtime.enable();
+    expect(ready.mode).toBe("linux-x11-compat-supervised");
+    expect(ready.mcp.env).toEqual({ ELECTRON_RUN_AS_NODE: "1", OMB_X11_NODE: process.execPath, OMB_X11_EMBEDDED: "1", OMB_X11_HOST_BUNDLE_ID: "com.openmausbot.app" });
+    const childEnvironment = context.spawnProcess.mock.calls[0][2].env;
+    expect(childEnvironment.OMB_X11_PARENT_LIVENESS_STDIN).toBe("1");
+    expect(childEnvironment.OPENAI_API_KEY).toBeUndefined();
+    await context.runtime.disable();
+    expect(context.child.exitCode).toBe(0);
+    expect(context.runtime.getStatus().status).toBe("disabled");
+  });
   it("cleans only known private runtime files from a dead owner", () => {
     const root = temporaryDirectory();
     const stale = path.join(root, "99999999-01234567-89a");

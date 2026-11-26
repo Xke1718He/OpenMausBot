@@ -114,7 +114,11 @@ async function loadLinuxRuntime() {
   }
   try {
     let bundledDriverPath;
-    if (app.isPackaged && !process.env.CUA_DRIVER_PATH) {
+    const compatibilityDirectory = app.isPackaged ? path.join(process.resourcesPath, "x11-compat") : path.join(app.getAppPath(), "dist-native", "x11-compat");
+    const compatibility = fs.existsSync(compatibilityDirectory);
+    if (compatibility) {
+      bundledDriverPath = path.join(compatibilityDirectory, "openmausbot-x11.cjs");
+    } else if (app.isPackaged && !process.env.CUA_DRIVER_PATH) {
       bundledDriverPath = path.join(process.resourcesPath, "cua-linux-x64", "cua-driver");
       // AppImage builders may normalize the resource tree to 0755/0775: copy the pinned binaries to a fresh 0700 dir and re-verify.
       if (process.env.APPIMAGE) {
@@ -127,6 +131,7 @@ async function loadLinuxRuntime() {
       getUserData: () => app.getPath("userData"),
       connectionStore,
       bundledDriverPath,
+      backend: compatibility ? "x11-compat" : "cua",
       onChange: (connection) => {
         notifyState(connection);
         followLinuxConnection(helperRestarts, connection);

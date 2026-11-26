@@ -411,7 +411,7 @@ export function spawnCli(
   opts: CliSpawnOptions,
   owner: CliOwner = "openmausbot",
 ): ChildProcessByStdio<Writable, Readable, Readable> {
-  const resolved = resolveCli(cli, args);
+  const resolved = resolveCli(cli, args, opts.env);
   assertSafeCliArgv(resolved);
   const homed = owner === "bot" || opts.engineHome ? engineHomes.forSpawn(opts.env ?? process.env) : null;
   const env = homed?.env ?? opts.env;
@@ -522,7 +522,7 @@ export function execCli(
   opts: ExecFileOptions,
   cb: (err: Error | null, stdout: string, stderr?: string) => void,
 ): void {
-  const resolved = resolveCli(cli, args);
+  const resolved = resolveCli(cli, args, opts.env);
   try {
     assertSafeCliArgv(resolved);
     opts = outsideBoxOptions(resolved.command, opts);

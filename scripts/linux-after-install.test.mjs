@@ -11,7 +11,7 @@ const removeHook = path.join(root, "build", "linux-after-remove.sh");
 const browserPolicy = path.join(root, "build", "linux-openmausbot-browser.apparmor");
 const temporaryDirectories = [];
 
-function fixture() {
+function fixture(backend = "cua") {
   const appRoot = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "omb-deb-upgrade-"));
   temporaryDirectories.push(appRoot);
   const resources = path.join(appRoot, "resources");
@@ -21,6 +21,16 @@ function fixture() {
   for (const executable of ["cua-driver", "cua-cursor-theme"]) {
     fs.writeFileSync(path.join(cuaRoot, executable), "fixture", { mode: 0o664 });
     fs.chmodSync(path.join(cuaRoot, executable), 0o664);
+  }
+  const x11Root = path.join(resources, "x11-compat");
+  if (backend === "x11-compat") {
+    fs.rmSync(cuaRoot, { recursive: true });
+    fs.mkdirSync(x11Root, { mode: 0o775 });
+    fs.chmodSync(x11Root, 0o775);
+    for (const name of ["openmausbot-x11.cjs", "release.json"]) {
+      fs.writeFileSync(path.join(x11Root, name), "fixture");
+      fs.chmodSync(path.join(x11Root, name), 0o664);
+    }
   }
   const chromiumSandbox = path.join(appRoot, "chrome-sandbox");
   fs.writeFileSync(chromiumSandbox, "fixture", { mode: 0o664 });
@@ -46,7 +56,7 @@ function fixture() {
   fs.writeFileSync(apparmorStatus, "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   fs.writeFileSync(path.join(systemRoot, "apparmor_restrict_unprivileged_userns"), "1\n");
   fs.writeFileSync(path.join(systemRoot, "apparmor-profiles"), "openmausbot-browser (unconfined)\n");
-  return { appRoot, resources, cuaRoot, chromiumSandbox, browserRoot, chromeRoot, systemRoot, apparmorDir, parser, apparmorStatus };
+  return { appRoot, resources, cuaRoot, x11Root, chromiumSandbox, browserRoot, chromeRoot, systemRoot, apparmorDir, parser, apparmorStatus };
 }
 
 function runHook(appRoot) {
@@ -86,6 +96,44 @@ describe("Linux DEB sandbox policy", () => {
 });
 
 describe.skipIf(process.platform !== "linux")("Linux DEB upgrade hook", () => {
+  it("configures X11 compatibility packages without requiring the CUA resource", () => {
+    const { appRoot, cuaRoot, x11Root, chromiumSandbox, systemRoot, apparmorDir } = fixture("x11-compat");
+    fs.rmSync(path.join(apparmorDir, "abi"), { recursive: true });
+    fs.unlinkSync(path.join(systemRoot, "apparmor_restrict_unprivileged_userns"));
+    for (let pass = 0; pass < 2; pass++) {
+      const result = runHook(appRoot);
+      expect(result.status, result.stderr).toBe(0);
+      expect(fs.existsSync(cuaRoot)).toBe(false);
+      expect(fs.statSync(x11Root).mode & 0o777).toBe(0o755);
+      expect(fs.statSync(path.join(x11Root, "openmausbot-x11.cjs")).mode & 0o777).toBe(0o755);
+      expect(fs.statSync(path.join(x11Root, "release.json")).mode & 0o777).toBe(0o644);
+      expect(fs.statSync(chromiumSandbox).mode & 0o7777).toBe(0o4755);
+    }
+  });
+
+  it.each(["openmausbot-x11.cjs", "release.json"])("refuses missing compatibility resource %s", name => {
+    const { appRoot, x11Root } = fixture("x11-compat");
+    fs.unlinkSync(path.join(x11Root, name));
+    const result = runHook(appRoot);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("X11 compatibility resource is missing or unsafe");
+  });
+
+  it.each(["symlink", "hardlink"])("refuses compatibility %s resources without changing their targets", kind => {
+    const { appRoot, x11Root } = fixture("x11-compat");
+    const external = path.join(appRoot, "external-helper");
+    fs.writeFileSync(external, "outside");
+    fs.chmodSync(external, 0o666);
+    const helper = path.join(x11Root, "openmausbot-x11.cjs");
+    fs.unlinkSync(helper);
+    if (kind === "symlink") fs.symlinkSync(external, helper);
+    else fs.linkSync(external, helper);
+    const result = runHook(appRoot);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("X11 compatibility resource is missing or unsafe");
+    expect(fs.statSync(external).mode & 0o777).toBe(0o666);
+  });
+
   it("skips an unsupported optional policy on legacy hosts without userns restriction", () => {
     const { appRoot, systemRoot, parser, apparmorDir } = fixture();
     fs.rmSync(path.join(apparmorDir, "abi"), { recursive: true });

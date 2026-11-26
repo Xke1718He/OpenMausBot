@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import vm from "node:vm";
@@ -120,6 +120,23 @@ async function load(pageAllowed, serverPage = undefined, confirmRestart = undefi
 const settle = async () => {
   for (let index = 0; index < 10; index += 1) await Promise.resolve();
 };
+
+it.skipIf(process.platform !== "linux")("keeps compatibility packages off the upstream update channel", async () => {
+  const previous = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+  mkdirSync(join(fixture.home, "x11-compat"));
+  writeFileSync(join(fixture.home, "x11-compat", "release.json"), "{}");
+  Object.defineProperty(process, "resourcesPath", { configurable: true, value: fixture.home });
+  try {
+    const { updater, autoUpdater, handlers } = await load(() => true);
+    updater.startUpdater();
+    await handlers.get("update:check")(page(LOCAL).event);
+    await vi.advanceTimersByTimeAsync(60000);
+    expect(autoUpdater.checkForUpdates).not.toHaveBeenCalled();
+  } finally {
+    if (previous) Object.defineProperty(process, "resourcesPath", previous);
+    else delete process.resourcesPath;
+  }
+});
 
 beforeEach(() => {
   fixture.home = mkdtempSync(join(tmpdir(), "omb-updater-home-"));

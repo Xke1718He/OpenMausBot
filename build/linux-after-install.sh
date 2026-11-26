@@ -198,12 +198,27 @@ install_browser_apparmor_profile() {
   "$APPARMOR_PARSER" -r "$target"
 }
 
-CUA_ROOT=$APP_ROOT/resources/cua-linux-x64
 repair_directory "$APP_ROOT"
 repair_directory "$APP_ROOT/resources"
-repair_directory "$CUA_ROOT"
-repair_executable "$CUA_ROOT/cua-driver"
-repair_executable "$CUA_ROOT/cua-cursor-theme"
+X11_ROOT=$APP_ROOT/resources/x11-compat
+if [ -e "$X11_ROOT" ] || [ -L "$X11_ROOT" ]; then
+  repair_directory "$X11_ROOT"
+  for name in openmausbot-x11.cjs release.json; do
+    target=$X11_ROOT/$name
+    if [ -L "$target" ] || [ ! -f "$target" ] || [ "$(stat -c '%h' -- "$target")" != 1 ]; then
+      echo "OpenMausBot X11 compatibility resource is missing or unsafe: $target" >&2
+      exit 1
+    fi
+  done
+  repair_executable "$X11_ROOT/openmausbot-x11.cjs"
+  if [ "$TEST_MODE" -eq 0 ]; then chown root:root -- "$X11_ROOT/release.json"; fi
+  chmod 0644 -- "$X11_ROOT/release.json"
+else
+  CUA_ROOT=$APP_ROOT/resources/cua-linux-x64
+  repair_directory "$CUA_ROOT"
+  repair_executable "$CUA_ROOT/cua-driver"
+  repair_executable "$CUA_ROOT/cua-cursor-theme"
+fi
 repair_chromium_sandbox "$APP_ROOT/chrome-sandbox"
 BROWSER_ROOT=$APP_ROOT/resources/browser-engine
 repair_directory "$BROWSER_ROOT"

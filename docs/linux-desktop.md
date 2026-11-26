@@ -4,6 +4,9 @@ OpenMausBot has an Ubuntu 24.04 LTS x86_64 desktop beta. The Electron package em
 installed builds do not require Node, pnpm, Swift, or a terminal at runtime. For giving a bot the same kind
 of Linux desktop on your own server instead of this machine, see [byo-vps.md](byo-vps.md).
 
+For Ubuntu 20.04 x86_64, use the separate [compatibility build](linux20-desktop.md)
+with `pnpm package:linux:20.04` and its X11 screenshot-and-input backend.
+
 ## What works
 
 - The native Electron window and embedded OpenMausBot server on GNOME Xorg and GNOME Wayland.

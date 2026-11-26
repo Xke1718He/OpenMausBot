@@ -1,9 +1,9 @@
 // A macOS app launched from Finder inherits a bare PATH (no ~/.local/bin, /opt/homebrew/bin or nvm/volta/asdf shims),
 // so every agent CLI spawn goes through augmentedPath().
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, openSync, readFileSync, readSync, statSync, readdirSync } from "node:fs";
+import { accessSync, closeSync, constants, existsSync, openSync, readFileSync, readSync, realpathSync, statSync, readdirSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, delimiter, dirname, extname, join } from "node:path";
+import { basename, delimiter, dirname, extname, isAbsolute, join } from "node:path";
 import { homeProgramsDistrusted, serverMayRunFrom } from "./bot-box/program-trust.ts";
 import { resolvePortableHermes } from "./portable-hermes.ts";
 
@@ -419,7 +419,7 @@ function parseCmdShim(shim: string, env?: NodeJS.ProcessEnv): ResolvedSpawn | nu
   return parsePowerShellFileShim(shim, text, env);
 }
 
-function parseNodeShebang(file: string, env?: NodeJS.ProcessEnv): ResolvedSpawn | null {
+function shebang(file: string): string | null {
   let head = "";
   let fd: number | null = null;
   try {
@@ -437,14 +437,40 @@ function parseNodeShebang(file: string, env?: NodeJS.ProcessEnv): ResolvedSpawn 
       }
     }
   }
-  if (!/^#!.*\bnode(\.exe)?\b/.test(head)) return null;
+  return head.trimEnd();
+}
+
+function parseNodeShebang(file: string, env?: NodeJS.ProcessEnv): ResolvedSpawn | null {
+  if (!/^#!.*\bnode(\.exe)?\b/.test(shebang(file) ?? "")) return null;
   const node = nodeExe(dirname(file), env);
   return node ? { command: node, args: [file] } : null;
 }
 
-/** One command word's platform spawn rules: identity except on win32, since POSIX resolves PATH and #! itself. */
+function executableFile(file: string): boolean {
+  try {
+    if (!isFile(file)) return false;
+    accessSync(file, constants.X_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function nvmNodeSpawn(cli: string, args: string[], env?: NodeJS.ProcessEnv): ResolvedSpawn | null {
+  const path = env?.PATH ?? augmentedPath();
+  const file = findCliCandidates(cli, path).find(executableFile);
+  if (!file || !isAbsolute(file)) return null;
+  const bin = dirname(file), version = dirname(bin);
+  if (basename(bin) !== "bin" || !/^v\d+\.\d+\.\d+(?:-[\w.-]+)?$/.test(basename(version)) ||
+      basename(dirname(version)) !== "node" || basename(dirname(dirname(version))) !== "versions") return null;
+  const node = join(bin, "node");
+  if (!executableFile(node) || !/^#!\s*\/usr\/bin\/env[\t ]+node$/.test(shebang(file) ?? "")) return null;
+  if ([file, node].some(file => !serverMayRunFrom(file) || !serverMayRunFrom(realpathSync(file)))) return null;
+  return { command: node, args: [file, ...args], env: { PATH: mergePaths([bin, ...path.split(delimiter)]) } };
+}
+
 function resolveWord(cli: string, args: string[], env?: NodeJS.ProcessEnv): ResolvedSpawn {
-  if (process.platform !== "win32") return { command: cli, args };
+  if (process.platform !== "win32") return nvmNodeSpawn(cli, args, env) ?? { command: cli, args };
   const file = whichWin(cli, env);
   if (!file) return { command: cli, args };
   const ext = extname(file).toLowerCase();

@@ -115,7 +115,7 @@ function localComputerReady(platform, connection) {
   ) {
     return false;
   }
-  if (connection.mode === "linux-x11-supervised") {
+  if (["linux-x11-supervised", "linux-x11-compat-supervised"].includes(connection.mode)) {
     return connection.session === "x11";
   }
   if (connection.mode === "linux-wayland-hyprland-supervised") {

@@ -373,6 +373,7 @@ Package the desktop application:
 pnpm package:mac      # macOS: DMG + ZIP; requires Swift/Xcode tools
 pnpm package:win      # Windows: installer + ZIP
 pnpm package:linux    # Linux x64: .deb + .rpm + AppImage + verified CUA runtime
+pnpm package:linux:20.04 # Ubuntu 20.04 x64: compatibility .deb → release/ubuntu20.04/
 ```
 
 ### Desktop capability status

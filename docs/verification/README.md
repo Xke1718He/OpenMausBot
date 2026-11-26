@@ -221,6 +221,10 @@ The [local computer launch regression](local-computer-launch.md) starts the
 host CUA gate through real Electron in a disposable home, without opening the
 desktop app or controlling the user's computer.
 
+The [Ubuntu 20.04 compatibility fixture](linux20-desktop.md) checks the X11
+backend's actual screenshots, input events and lifecycle in an isolated virtual
+desktop, with an optional packaged Electron startup check.
+
 The [remote desktop viewer fixture](desktop-viewer.md) checks the bundled
 noVNC page, authenticated WebSocket proxy, desktop input, reconnect and logout
 against an isolated server, synthetic desktop and VPS SSH forward.

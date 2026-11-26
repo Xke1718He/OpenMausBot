@@ -89,6 +89,25 @@ function linuxDescriptor(userData: string, { session = "x11" }: { session?: "x11
 }
 
 describe("local computer descriptor contract", () => {
+  it("keeps the X11 compatibility backend distinct and pins its Node launcher", () => {
+    const directory = mkdtempSync(join(tmpdir(), "omb-x11-contract-"));
+    try {
+      const original = linuxDescriptor(directory);
+      const executable = join(directory, "openmausbot-x11.cjs");
+      const compatibility = { ...original, mode: "linux-x11-compat-supervised",
+        driver: { ...original.driver, path: executable, version: "1.0.0", source: "x11-compat" },
+        mcp: { ...original.mcp, command: executable, env: {
+          ELECTRON_RUN_AS_NODE: "1", OMB_X11_NODE: process.execPath, OMB_X11_EMBEDDED: "1", OMB_X11_HOST_BUNDLE_ID: "com.openmausbot.app",
+        } },
+      };
+      expect(decodeLinuxDescriptor(compatibility)).toMatchObject({ command: executable, platform: "linux", scope: "local-computer" });
+      expect(decodeLinuxDescriptor({ ...compatibility, mode: "linux-x11-supervised" })).toBeNull();
+      expect(decodeLinuxDescriptor({ ...compatibility, session: "wayland" })).toBeNull();
+      expect(decodeLinuxDescriptor({ ...compatibility, driver: { ...compatibility.driver, version: "0.41.3" } })).toBeNull();
+      expect(decodeLinuxDescriptor({ ...compatibility, mcp: { ...compatibility.mcp, env: { ...compatibility.mcp.env, OMB_X11_NODE: "/untrusted/node" } } })).toBeNull();
+      expect(decodeLinuxDescriptor({ ...compatibility, mcp: { ...compatibility.mcp, env: { ...compatibility.mcp.env, DISPLAY: ":0" } } })).toBeNull();
+    } finally { rmSync(directory, { recursive: true, force: true }); }
+  });
   it("wraps only the transport while preserving descriptor identity and original driver environment", () => {
     const connection = {
       command: "/trusted/cua-driver", args: ["mcp", "--socket", "/trusted/driver.sock"],

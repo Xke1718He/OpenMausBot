@@ -190,7 +190,7 @@ export function attachUpdaterWindow(mainWindow) {
 
 /** `signals` (quietSignals): what tells a quiet moment; without them a downloaded update installs only on Restart or quit. */
 export function startUpdater(signals = null) {
-  if (!app.isPackaged) {
+  if (!app.isPackaged || (process.platform === "linux" && typeof process.resourcesPath === "string" && existsSync(join(process.resourcesPath, "x11-compat", "release.json")))) {
     updaterCoordinator = null;
     setState({ status: "idle" });
     return;

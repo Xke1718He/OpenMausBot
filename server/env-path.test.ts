@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { delimiter, join, relative } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -15,7 +15,7 @@ import {
   splitCliString,
   userHome,
 } from "./env-path.ts";
-import { resolveCli } from "./procs.ts";
+import { execCli, resolveCli } from "./procs.ts";
 import { removeTempDir } from "./testing/cleanup.ts";
 
 const posixIt = it.skipIf(process.platform === "win32");
@@ -612,8 +612,71 @@ IF EXIST "%NPM_PREFIX_${upper}_CLI_JS%" (
 };
 
 describe("resolveCli", () => {
-  it.skipIf(process.platform === "win32")("is identity off Windows — the kernel already resolves PATH and #!", () => {
-    expect(resolveCli("claude", ["-p", "hi"])).toEqual({ command: "claude", args: ["-p", "hi"] });
+  it.skipIf(process.platform === "win32")("keeps platform lookup for other POSIX commands", () => {
+    expect(resolveCli("omb-missing-cli", ["-p", "hi"])).toEqual({ command: "omb-missing-cli", args: ["-p", "hi"] });
+  });
+});
+
+describe.skipIf(process.platform === "win32")("POSIX nvm CLI runtime", () => {
+  let directory: string, bin: string, legacy: string;
+  beforeEach(() => {
+    directory = mkdtempSync(join(tmpdir(), "omb-nvm-launch-"));
+    bin = join(directory, ".nvm", "versions", "node", "v24.0.0", "bin");
+    legacy = join(directory, "system-bin");
+    mkdirSync(bin, { recursive: true }); mkdirSync(legacy);
+    symlinkSync(process.execPath, join(bin, "node"));
+    writeFileSync(join(legacy, "node"), "#!/bin/sh\nexit 91\n", { mode: 0o755 });
+    writeFileSync(join(bin, "package.json"), '{"type":"module"}');
+    writeFileSync(join(bin, "codex"), '#!/usr/bin/env node\nconsole.log(JSON.stringify({version:process.version,path:process.env.PATH,args:process.argv.slice(2)}));\n', { mode: 0o755 });
+  });
+  afterEach(() => rmSync(directory, { recursive: true, force: true }));
+
+  it("runs an npm CLI with its nvm Node despite a GUI PATH leading with an obsolete Node", async () => {
+    const path = [legacy, bin].join(delimiter);
+    const result = await new Promise<string>((resolve, reject) => {
+      execCli("codex", ["app-server", "a b", "你好"], { env: { PATH: path }, timeout: 5000 }, (error, stdout) => error ? reject(error) : resolve(stdout));
+    });
+    const report = JSON.parse(result);
+    expect(report.version).toBe(process.version);
+    expect(report.path.split(delimiter)).toEqual([bin, legacy]);
+    expect(report.args).toEqual(["app-server", "a b", "你好"]);
+  });
+
+  it("supports an absolute CLI path and keeps fixed arguments before driver arguments", () => {
+    const file = join(bin, "codex");
+    expect(resolveCli(`"${file}" --profile "work profile"`, ["app-server"], { PATH: legacy })).toEqual({
+      command: join(bin, "node"), args: [file, "--profile", "work profile", "app-server"], env: { PATH: [bin, legacy].join(delimiter) },
+    });
+  });
+
+  it("preserves an explicitly configured Node command", () => {
+    expect(resolveCli(`"${join(legacy, "node")}" "${join(bin, "codex")}"`, ["app-server"], { PATH: bin })).toEqual({
+      command: join(legacy, "node"), args: [join(bin, "codex"), "app-server"],
+    });
+  });
+
+  it.each(["#!/usr/bin/node", "#!/usr/bin/env -S node --no-warnings", "#!/bin/sh"])("preserves interpreter choices in %s", header => {
+    writeFileSync(join(bin, "codex"), `${header}\n`);
+    expect(resolveCli(join(bin, "codex"), ["app-server"], { PATH: legacy })).toEqual({ command: join(bin, "codex"), args: ["app-server"] });
+  });
+
+  it("leaves an incomplete nvm installation to normal platform lookup", () => {
+    rmSync(join(bin, "node"));
+    expect(resolveCli("codex", [], { PATH: bin })).toEqual({ command: "codex", args: [] });
+  });
+
+  it("keeps the server's refusal of a CLI redirected into a bot-writable home", async () => {
+    const { distrustHomePrograms } = await import("./bot-box/program-trust.ts");
+    const workspace = join(directory, "bot-home");
+    mkdirSync(workspace);
+    const target = join(workspace, "cli.mjs"), file = join(bin, "codex");
+    writeFileSync(target, "#!/usr/bin/env node\n", { mode: 0o755 });
+    rmSync(file); symlinkSync(target, file);
+    distrustHomePrograms(workspace);
+    try {
+      await expect(new Promise((resolve, reject) => execCli(file, [], { env: { PATH: bin } }, (error, stdout) => error ? reject(error) : resolve(stdout))))
+        .rejects.toMatchObject({ code: "EACCES" });
+    } finally { distrustHomePrograms(null); }
   });
 });
 

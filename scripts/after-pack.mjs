@@ -10,6 +10,9 @@ import { fileURLToPath } from "node:url";
 import { verifyBrowserBundle } from "./prepare-browser.mjs";
 import { pinnedDuckdbVersion, pinnedOnePasswordVersion, pinnedResvgVersion, verifyDuckdbTree } from "./prepare-duckdb.mjs";
 import { LIPO_ARCH, isMachO, writeThinMachO } from "./mac-thin.mjs";
+import { createRequire } from "node:module";
+
+const { verifyX11Bundle } = createRequire(import.meta.url)("../electron/x11-bundle.cjs");
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -140,6 +143,15 @@ export default async function afterPack(context) {
   if (context.electronPlatformName === "darwin") await thinMacPlatformTools(resources, arch);
 
   if (context.electronPlatformName !== "linux") return;
+
+  const compatibility = path.join(resources, "x11-compat");
+  if (await lstat(compatibility).then(() => true, error => { if (error.code === "ENOENT") return false; throw error; })) {
+    for (const directory of [context.appOutDir, resources, compatibility]) await requireRealDirectory(directory);
+    await requireRegularFile(path.join(compatibility, "openmausbot-x11.cjs"), 0o755);
+    await requireRegularFile(path.join(compatibility, "release.json"), 0o644);
+    verifyX11Bundle(compatibility);
+    return;
+  }
 
   const cuaRoot = path.join(resources, "cua-linux-x64");
   const licenses = path.join(cuaRoot, "licenses");
